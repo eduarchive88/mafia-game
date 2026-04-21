@@ -1,0 +1,33 @@
+# 빌드 스테이지
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# 패키지 설치
+COPY package*.json ./
+RUN npm ci
+
+# Next.js 빌드
+COPY . .
+RUN npm run build
+
+# 런타임 스테이지
+FROM node:20-alpine
+
+WORKDIR /app
+
+# 필수 패키지만 설치
+COPY package*.json ./
+RUN npm ci --only=production
+
+# 빌드된 파일 복사
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/server.js ./server.js
+COPY --from=builder /app/next.config.ts ./next.config.ts
+
+# 포트 노출
+EXPOSE 3000
+
+# 시작 커맨드 (Next.js + Socket.io 통합 서버)
+CMD ["node", "server.js"]
