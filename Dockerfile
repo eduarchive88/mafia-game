@@ -3,9 +3,9 @@ FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# 패키지 설치
+# 패키지 설치 (devDependencies 포함 - 빌드에 필요)
 COPY package*.json ./
-RUN npm ci
+RUN NODE_ENV=development npm ci
 
 # Next.js 빌드
 COPY . .
