@@ -26,6 +26,9 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/server.js ./server.js
 COPY --from=builder /app/next.config.ts ./next.config.ts
 
+# 프로덕션 모드 강제 설정
+ENV NODE_ENV=production
+
 # 포트 노출
 EXPOSE 3000
 
