@@ -302,8 +302,9 @@ function initSocketServer(httpServer: any): SocketIOServer {
 
         if (result.success) {
           console.log(`[Room: ${roomCode}] 찬반 투표 마감. 처형: ${result.executed}`);
-          const roomState = gameEngine.getRoomState(roomCode);
+          gameEngine.transitionState(roomCode, 'day', playerId);
           const victoryTeam = gameEngine.checkVictoryCondition(roomCode);
+          const roomState = gameEngine.getRoomState(roomCode);
           const executionResult = gameEngine.getLastDayExecutionResult(roomCode);
 
           io!.to(roomCode).emit('execution-completed', {
