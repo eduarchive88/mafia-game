@@ -190,24 +190,22 @@ function initSocketServer(httpServer: any): SocketIOServer {
         const success = gameEngine.submitDayVote(roomCode, playerId, data.targetId);
 
         if (success) {
-          const room = gameEngine.getRoom(roomCode);
-          const voter = room?.players.get(playerId);
-          const target = data.targetId ? room?.players.get(data.targetId) : null;
-          console.log(`[Room: ${roomCode}] 낮 투표: ${voter?.nickname} -> ${target?.nickname || '없음'}`);
-          // 모든 플레이어에게 실시간 투표 현황 공지 (발신자 포함)
-          io!.to(roomCode).emit('vote-updated', {
-            voterId: playerId,
-            voterNickname: voter?.nickname,
-            targetId: data.targetId,
-            targetNickname: target?.nickname || null,
+          const room = gameEngine.getRoom(roomCode)!;
+          const voter = room.players.get(playerId);
+          const target = data.targetId ? room.players.get(data.targetId) : null;
+          console.log(`[Room: ${roomCode}] 낮 투표: ${voter?.nickname} -> ${target?.nickname || '없음'} (총 ${room.dayVotes.size}표)`);
+          // 현재 전체 투표 현황 snapshot 전송 (delta 방식 대신 full snapshot)
+          const snapshot: { voterId: string; voterNickname: string; targetId: string; targetNickname: string }[] = [];
+          room.dayVotes.forEach((tid, vid) => {
+            if (tid !== null) {
+              const v = room.players.get(vid);
+              const t = room.players.get(tid);
+              if (v && t) snapshot.push({ voterId: vid, voterNickname: v.nickname, targetId: tid, targetNickname: t.nickname });
+            }
           });
-          // 발신자도 확실히 받도록 직접 emit
-          socket.emit('vote-updated', {
-            voterId: playerId,
-            voterNickname: voter?.nickname,
-            targetId: data.targetId,
-            targetNickname: target?.nickname || null,
-          });
+          io!.to(roomCode).emit('vote-snapshot', snapshot);
+          // 발신자도 확실히
+          socket.emit('vote-snapshot', snapshot);
           callback({ success: true });
         } else {
           callback({ success: false, error: '투표 실패' });
@@ -221,6 +219,10 @@ function initSocketServer(httpServer: any): SocketIOServer {
     // 1차 투표 마감 (방장)
     socket.on('close-day-vote', (callback) => {
       try {
+        if (typeof callback !== 'function') {
+          console.error('[Socket] close-day-vote: callback이 함수가 아님');
+          return;
+        }
         const { roomCode, playerId } = socket.data;
         if (!roomCode || !playerId) {
           console.error('[Socket] close-day-vote: socket.data 누락', socket.data);

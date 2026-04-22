@@ -173,13 +173,9 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
     socket?.on('execution-result-night', (data: any) => {
       setExecutionResult(data);
     });
-    // 1차 투표 실시간 현황
-    socket?.on('vote-updated', (data: any) => {
-      setLiveVotes(prev => {
-        const filtered = prev.filter(v => v.voterId !== data.voterId);
-        if (data.targetId) return [...filtered, data];
-        return filtered;
-      });
+    // 1차 투표 전체 현황 snapshot (delta 대신 full 교체)
+    socket?.on('vote-snapshot', (data: any[]) => {
+      setLiveVotes(data);
     });
     // 1차 투표 마감 결과
     socket?.on('vote-closed', (data: any) => {
@@ -211,7 +207,7 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
     return () => {
       socket?.off('night-result');
       socket?.off('execution-result-night');
-      socket?.off('vote-updated');
+      socket?.off('vote-snapshot');
       socket?.off('vote-closed');
       socket?.off('final-vote-updated');
     };
@@ -291,20 +287,7 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
     socket?.emit('day-vote', { targetId }, (response: any) => {
       if (response.success) {
         setHasVoted(true);
-        // vote-updated 이벤트에만 의존하지 않고 직접 업데이트
-        if (targetId) {
-          const targetPlayer = players.find(p => p.id === targetId);
-          const me = players.find(p => p.id === playerId);
-          setLiveVotes(prev => {
-            const filtered = prev.filter(v => v.voterId !== playerId);
-            return [...filtered, {
-              voterId: playerId,
-              voterNickname: me?.nickname || '',
-              targetId,
-              targetNickname: targetPlayer?.nickname || '',
-            }];
-          });
-        }
+        // liveVotes는 서버에서 vote-snapshot으로 업데이트됨
       }
     });
   };
@@ -421,7 +404,13 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
                     onClick={() => {
                       setVoteCloseError(null);
                       setVoteCloseLoading(true);
+                      // 6초 타임아웃: 서버 무응답 대비
+                      const timer = setTimeout(() => {
+                        setVoteCloseLoading(false);
+                        setVoteCloseError('서버 응답 없음 — 다시 눌러보세요');
+                      }, 6000);
                       socket?.emit('close-day-vote', (r: any) => {
+                        clearTimeout(timer);
                         setVoteCloseLoading(false);
                         if (!r?.success) {
                           setVoteCloseError(r?.error || '투표 마감 실패 — 다시 시도하세요');
