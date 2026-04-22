@@ -30,8 +30,23 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
   const [nightResult, setNightResult] = useState<{ type: 'killed'; victimName: string } | { type: 'saved' } | { type: 'nobody' } | null>(null);
   const [executionResult, setExecutionResult] = useState<{
     voteCounts: { playerId: string; nickname: string; votes: number }[];
+    voteEntries: { voterId: string; voterNickname: string; targetId: string; targetNickname: string }[];
+    finalVoteEntries: { voterId: string; voterNickname: string; choice: 'execute' | 'spare' }[];
+    finalVoteTarget: string | null;
+    finalVoteTargetNickname: string | null;
     executedNickname: string | null;
     executedRole: string | null;
+  } | null>(null);
+  // 1차 투표: 실시간 투표 현황 (공개)
+  const [liveVotes, setLiveVotes] = useState<{ voterId: string; voterNickname: string; targetId: string | null; targetNickname: string | null }[]>([]);
+  // 2차 찬반: 실시간 현황
+  const [liveFinalVotes, setLiveFinalVotes] = useState<{ voterId: string; voterNickname: string; choice: 'execute' | 'spare' }[]>([]);
+  // 1차 투표 마감 후 결과 (찬반 단계 진입 전)
+  const [voteClosedResult, setVoteClosedResult] = useState<{
+    voteCounts: { playerId: string; nickname: string; votes: number }[];
+    voteEntries: { voterId: string; voterNickname: string; targetId: string; targetNickname: string }[];
+    finalVoteTarget: string | null;
+    finalVoteTargetNickname: string | null;
   } | null>(null);
 
   // 역할 완료 사운드 (Web Audio API)
@@ -116,22 +131,24 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
       setPlayers(Object.values(data.roomState?.players || {}));
       setSelectedTarget(null);
       setHasVoted(false);
-      // 밤/낮 전환 시 밤 상태 초기화
       setNightStatus({ mafia: false, doctor: false, police: false });
       setPoliceResult(null);
-      // 낮→밤: 밤 결과 배너 초기화 (처형 결과는 밤 시작 시 보여야 하므로 유지)
       if (data.state === 'night') {
         setNightResult(null);
+        setLiveVotes([]);
+        setLiveFinalVotes([]);
+        setVoteClosedResult(null);
       }
-      // 밤→낮: 처형 결과 초기화 (새 낮이 시작되므로)
       if (data.state === 'day') {
         setExecutionResult(null);
+        setLiveVotes([]);
+        setLiveFinalVotes([]);
+        setVoteClosedResult(null);
       }
+      if (data.state === 'vote') setLiveVotes([]);
+      if (data.state === 'execution') setLiveFinalVotes([]);
     });
-
-    return () => {
-      socket?.off('state-changed');
-    };
+    return () => { socket?.off('state-changed'); };
   }, [socket]);
 
   // 역할 완료 이벤트 (밤 단계)
@@ -151,13 +168,44 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
     socket?.on('night-result', (data: { type: string; victimName?: string }) => {
       setNightResult(data as any);
     });
-    // 밤 시작 시 처형 결과 재수신 (재연결 플레이어 포함)
     socket?.on('execution-result-night', (data: any) => {
       setExecutionResult(data);
+    });
+    // 1차 투표 실시간 현황
+    socket?.on('vote-updated', (data: any) => {
+      setLiveVotes(prev => {
+        const filtered = prev.filter(v => v.voterId !== data.voterId);
+        if (data.targetId) return [...filtered, data];
+        return filtered;
+      });
+    });
+    // 1차 투표 마감 결과
+    socket?.on('vote-closed', (data: any) => {
+      setVoteClosedResult({
+        voteCounts: data.voteCounts,
+        voteEntries: data.voteEntries,
+        finalVoteTarget: data.finalVoteTarget,
+        finalVoteTargetNickname: data.finalVoteTargetNickname,
+      });
+      if (data.state === 'execution') {
+        setGameState('execution');
+        setPlayers(Object.values(data.roomState?.players || {}));
+        setHasVoted(false);
+      }
+    });
+    // 2차 찬반 실시간 현황
+    socket?.on('final-vote-updated', (data: any) => {
+      setLiveFinalVotes(prev => {
+        const filtered = prev.filter(v => v.voterId !== data.voterId);
+        return [...filtered, data];
+      });
     });
     return () => {
       socket?.off('night-result');
       socket?.off('execution-result-night');
+      socket?.off('vote-updated');
+      socket?.off('vote-closed');
+      socket?.off('final-vote-updated');
     };
   }, [socket]);
 
@@ -192,11 +240,10 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
       if (data.executionResult) {
         setExecutionResult(data.executionResult);
       }
+      // 처형 완료 후 상태를 day로 (방장이 밤 전환 전까지)
+      setGameState('day');
     });
-
-    return () => {
-      socket?.off('execution-completed');
-    };
+    return () => { socket?.off('execution-completed'); };
   }, [socket]);
 
   const handleNightVote = (targetId: string) => {
@@ -336,8 +383,8 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
             </div>
             {isHost && gameState !== 'ended' && (
               <div className="flex flex-wrap gap-2">
-                {/* 낮: 투표 시작 버튼 */}
-                {gameState === 'day' && (
+                {/* 낮: 투표 시작 */}
+                {gameState === 'day' && !executionResult && (
                   <button
                     onClick={() => socket?.emit('transition-state', { targetState: 'vote' }, () => {})}
                     className="px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded transition font-semibold"
@@ -345,17 +392,26 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
                     🗳️ 투표 시작
                   </button>
                 )}
-                {/* 투표 중 & 처형 전: 처형 실행만 */}
-                {gameState === 'vote' && !executionResult && (
+                {/* 투표 단계: 1차 투표 마감 */}
+                {gameState === 'vote' && (
                   <button
-                    onClick={() => socket?.emit('execute-vote', (r: any) => { if (!r?.success) {} })}
+                    onClick={() => socket?.emit('close-day-vote', (r: any) => {})}
                     className="px-4 py-2 bg-red-700 hover:bg-red-600 rounded transition font-semibold"
                   >
-                    ⚖️ 처형 실행
+                    ⚖️ 투표 마감
                   </button>
                 )}
-                {/* 처형 완료 후: 밤으로 */}
-                {gameState === 'vote' && executionResult && (
+                {/* 처형 단계: 2차 찬반 마감 */}
+                {gameState === 'execution' && (
+                  <button
+                    onClick={() => socket?.emit('close-final-vote', (r: any) => {})}
+                    className="px-4 py-2 bg-red-900 hover:bg-red-800 rounded transition font-semibold"
+                  >
+                    💀 찬반 마감
+                  </button>
+                )}
+                {/* 처형 결과 후 (day 상태에 executionResult 있음): 밤으로 */}
+                {gameState === 'day' && executionResult && (
                   <button
                     onClick={() => socket?.emit('transition-state', { targetState: 'night' }, () => {})}
                     className="px-4 py-2 bg-indigo-700 hover:bg-indigo-600 rounded transition font-semibold"
@@ -383,8 +439,8 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
           </div>
         )}
 
-        {/* 낮 처형 결과 공지 배너 (처형 후 ~ 다음 낮 전까지 표시: vote 상태 + 밤 시작 시) */}
-        {executionResult && gameState !== 'waiting' && (
+        {/* 처형 결과 공지 배너 */}
+        {executionResult && (gameState === 'day' || gameState === 'night') && (
           <div className={`rounded-lg p-5 mb-6 border ${
             executionResult.executedRole === 'mafia'
               ? 'bg-green-950 border-green-700'
@@ -392,7 +448,6 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
                 ? 'bg-red-950 border-red-700'
                 : 'bg-gray-900 border-gray-700'
           }`}>
-            {/* 처형 결과 메시지 */}
             <p className="text-center text-xl font-bold mb-4">
               {executionResult.executedRole === 'mafia' ? (
                 <span className="text-green-300">
@@ -405,11 +460,9 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
                   <span className="text-base font-normal text-red-400">마피아의 음모가 계속됩니다...</span>
                 </span>
               ) : (
-                <span className="text-gray-400">⚖️ 동점으로 아무도 처형되지 않았습니다.</span>
+                <span className="text-gray-400">⚖️ 찬반 동점 또는 살리기로 아무도 처형되지 않았습니다.</span>
               )}
             </p>
-
-            {/* 정체 공개 */}
             {executionResult.executedNickname && executionResult.executedRole && (
               <p className="text-center text-sm mb-4">
                 <span className="bg-gray-800 rounded px-3 py-1">
@@ -422,28 +475,34 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
                   }`}>
                     {executionResult.executedRole === 'mafia' ? '🔴 마피아' :
                      executionResult.executedRole === 'doctor' ? '💊 의사' :
-                     executionResult.executedRole === 'police' ? '🔍 경찰' :
-                     '👤 시민'}
+                     executionResult.executedRole === 'police' ? '🔍 경찰' : '👤 시민'}
                   </span>
                 </span>
               </p>
             )}
-
-            {/* 투표 현황 */}
-            {executionResult.voteCounts.length > 0 && (
+            {/* 1차 투표 내역 */}
+            {executionResult.voteEntries && executionResult.voteEntries.length > 0 && (
+              <div className="mb-3">
+                <p className="text-xs text-gray-400 text-center mb-2">1차 투표 (지목)</p>
+                <div className="flex flex-wrap justify-center gap-1">
+                  {executionResult.voteEntries.map((v, i) => (
+                    <span key={i} className="px-2 py-1 bg-gray-800 rounded text-xs text-gray-300">
+                      {v.voterNickname} → {v.targetNickname}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* 2차 찬반 내역 */}
+            {executionResult.finalVoteEntries && executionResult.finalVoteEntries.length > 0 && (
               <div>
-                <p className="text-xs text-gray-400 text-center mb-2">투표 결과</p>
-                <div className="flex flex-wrap justify-center gap-2">
-                  {executionResult.voteCounts.map((v) => (
-                    <span
-                      key={v.playerId}
-                      className={`px-3 py-1 rounded-full text-sm font-semibold border ${
-                        v.playerId === executionResult.voteCounts[0]?.playerId
-                          ? 'bg-red-900 border-red-600 text-red-200'
-                          : 'bg-gray-800 border-gray-600 text-gray-300'
-                      }`}
-                    >
-                      {v.nickname} {v.votes}표
+                <p className="text-xs text-gray-400 text-center mb-2">2차 투표 (찬반)</p>
+                <div className="flex flex-wrap justify-center gap-1">
+                  {executionResult.finalVoteEntries.map((v, i) => (
+                    <span key={i} className={`px-2 py-1 rounded text-xs font-semibold ${
+                      v.choice === 'execute' ? 'bg-red-900 text-red-300' : 'bg-blue-900 text-blue-300'
+                    }`}>
+                      {v.voterNickname}: {v.choice === 'execute' ? '처형' : '살리기'}
                     </span>
                   ))}
                 </div>
@@ -452,7 +511,7 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
           </div>
         )}
 
-        {/* 밤 결과 공지 배너 (낮 + 투표 단계에서 표시) */}
+        {/* 밤 결과 배너 */}
         {nightResult && (gameState === 'day' || gameState === 'vote') && (
           <div className={`rounded-lg p-4 mb-6 text-center font-bold text-lg border transition-all ${
             nightResult.type === 'killed'
@@ -469,33 +528,111 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
           </div>
         )}
 
-        {/* 낮 토론 / 투표 안내 패널 */}
-        {(gameState === 'day' || gameState === 'vote') && !winner && (
+        {/* 낮 토론 안내 패널 */}
+        {gameState === 'day' && !winner && !executionResult && (
+          <div className="bg-amber-950/60 border border-amber-800 rounded-lg p-4 mb-6">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xl">☀️</span>
+              <h3 className="text-lg font-bold text-amber-300">낮 — 토론 시간</h3>
+            </div>
+            <p className="text-gray-300 text-sm">마피아를 찾아 토론하세요. 방장이 <span className="text-amber-300 font-semibold">🗳️ 투표 시작</span>을 누르면 1차 투표가 시작됩니다.</p>
+          </div>
+        )}
+
+        {/* 1차 지목 투표 패널 */}
+        {gameState === 'vote' && !winner && (
           <div className="bg-amber-950/60 border border-amber-800 rounded-lg p-4 mb-6">
             <div className="flex items-center gap-2 mb-3">
-              <span className="text-xl">{gameState === 'vote' ? '🗳️' : '☀️'}</span>
-              <h3 className="text-lg font-bold text-amber-300">
-                {gameState === 'day' ? '낮 — 토론 시간' : '낮 — 투표 시간'}
-              </h3>
+              <span className="text-xl">🗳️</span>
+              <h3 className="text-lg font-bold text-amber-300">1차 투표 — 처형 대상 지목 (공개)</h3>
             </div>
-            {gameState === 'day' && (
-              <p className="text-gray-300 text-sm">마피아를 찾아 토론하세요. 방장이 <span className="text-amber-300 font-semibold">🗳️ 투표 시작</span>을 누르면 투표가 시작됩니다.</p>
+            {isAlive && !hasVoted && (
+              <p className="text-gray-300 text-sm mb-3">아래 플레이어 목록에서 <span className="text-red-300 font-semibold">처형할 대상</span>을 클릭하세요. 공개 투표입니다.</p>
             )}
-            {gameState === 'vote' && (
-              <div>
-                {isAlive && !hasVoted && (
-                  <p className="text-gray-300 text-sm">아래 생존 플레이어 목록에서 <span className="text-red-300 font-semibold">처형할 대상</span>을 선택하세요.</p>
-                )}
-                {isAlive && hasVoted && (
-                  <p className="text-green-400 text-sm">✅ 투표 완료! 다른 플레이어의 투표를 기다리는 중...</p>
-                )}
-                {!isAlive && (
-                  <p className="text-gray-500 text-sm">☠️ 사망한 상태입니다. 결과를 기다리세요.</p>
-                )}
-                {isHost && (
-                  <p className="text-amber-400 text-sm mt-2">📢 방장: 투표가 완료되면 <span className="font-semibold">⚖️ 처형 실행</span>을 눌러 결과를 공개하세요.</p>
-                )}
+            {isAlive && hasVoted && (
+              <p className="text-green-400 text-sm mb-3">✅ 투표 완료! 다른 플레이어의 투표를 기다리는 중...</p>
+            )}
+            {!isAlive && (
+              <p className="text-gray-500 text-sm mb-3">☠️ 사망한 상태입니다. 결과를 기다리세요.</p>
+            )}
+            {/* 실시간 투표 현황 */}
+            {liveVotes.length > 0 && (
+              <div className="mt-2">
+                <p className="text-xs text-gray-400 mb-2">실시간 지목 현황</p>
+                <div className="flex flex-wrap gap-2">
+                  {liveVotes.map((v) => (
+                    <span key={v.voterId} className="px-2 py-1 bg-gray-800 rounded text-xs text-gray-300">
+                      {v.voterNickname} → {v.targetNickname}
+                    </span>
+                  ))}
+                </div>
               </div>
+            )}
+            {isHost && (
+              <p className="text-amber-400 text-sm mt-3">📢 모든 투표가 완료되면 <span className="font-semibold">⚖️ 투표 마감</span>을 누르세요.</p>
+            )}
+          </div>
+        )}
+
+        {/* 2차 찬반 투표 패널 */}
+        {gameState === 'execution' && !winner && (
+          <div className="bg-red-950/70 border border-red-800 rounded-lg p-4 mb-6">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-xl">💀</span>
+              <h3 className="text-lg font-bold text-red-300">2차 투표 — 처형 여부 (찬반, 공개)</h3>
+            </div>
+            {voteClosedResult?.finalVoteTargetNickname && (
+              <p className="text-center text-lg font-bold text-white mb-4">
+                최다득표자: <span className="text-red-300 underline">{voteClosedResult.finalVoteTargetNickname}</span>
+              </p>
+            )}
+            {isAlive && !hasVoted && (
+              <div className="flex justify-center gap-4 mb-4">
+                <button
+                  onClick={() => {
+                    socket?.emit('final-vote', { choice: 'execute' }, (r: any) => {
+                      if (r?.success) setHasVoted(true);
+                    });
+                  }}
+                  className="px-6 py-2 bg-red-700 hover:bg-red-600 rounded-lg font-bold text-lg transition"
+                >
+                  ⚔️ 처형
+                </button>
+                <button
+                  onClick={() => {
+                    socket?.emit('final-vote', { choice: 'spare' }, (r: any) => {
+                      if (r?.success) setHasVoted(true);
+                    });
+                  }}
+                  className="px-6 py-2 bg-blue-700 hover:bg-blue-600 rounded-lg font-bold text-lg transition"
+                >
+                  🛡️ 살리기
+                </button>
+              </div>
+            )}
+            {isAlive && hasVoted && (
+              <p className="text-green-400 text-center text-sm mb-4">✅ 찬반 투표 완료!</p>
+            )}
+            {!isAlive && (
+              <p className="text-gray-500 text-center text-sm mb-4">☠️ 사망한 상태입니다.</p>
+            )}
+            {/* 실시간 찬반 현황 */}
+            {liveFinalVotes.length > 0 && (
+              <div>
+                <p className="text-xs text-gray-400 text-center mb-2">실시간 찬반 현황</p>
+                <div className="flex flex-wrap justify-center gap-2">
+                  {liveFinalVotes.map((v) => (
+                    <span key={v.voterId} className={`px-2 py-1 rounded text-xs font-semibold ${
+                      v.choice === 'execute' ? 'bg-red-900 text-red-300' : 'bg-blue-900 text-blue-300'
+                    }`}>
+                      {v.voterNickname}: {v.choice === 'execute' ? '처형' : '살리기'}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {isHost && (
+              <p className="text-amber-400 text-sm text-center mt-3">📢 방장: 모두 투표하면 <span className="font-semibold">💀 찬반 마감</span>을 누르세요.</p>
             )}
           </div>
         )}
@@ -668,15 +805,6 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
             className="w-full py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:cursor-not-allowed text-white font-bold rounded transition"
           >
             {players.length < 4 ? `게임 시작 (${players.length}/4명 — 최소 4명 필요)` : `게임 시작 (${players.length}명)`}
-          </button>
-        )}
-
-        {gameState === 'vote' && isHost && (
-          <button
-            onClick={() => socket?.emit('execute-vote', () => {})}
-            className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded transition"
-          >
-            투표 종료 및 처형
           </button>
         )}
 

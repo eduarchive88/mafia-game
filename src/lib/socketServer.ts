@@ -190,7 +190,17 @@ function initSocketServer(httpServer: any): SocketIOServer {
         const success = gameEngine.submitDayVote(roomCode, playerId, data.targetId);
 
         if (success) {
-          console.log(`[Room: ${roomCode}] 낮 투표: ${playerId} -> ${data.targetId || '투표 안함'}`);
+          const room = gameEngine.getRoom(roomCode);
+          const voter = room?.players.get(playerId);
+          const target = data.targetId ? room?.players.get(data.targetId) : null;
+          console.log(`[Room: ${roomCode}] 낮 투표: ${voter?.nickname} -> ${target?.nickname || '없음'}`);
+          // 모든 플레이어에게 실시간 투표 현황 공지
+          io!.to(roomCode).emit('vote-updated', {
+            voterId: playerId,
+            voterNickname: voter?.nickname,
+            targetId: data.targetId,
+            targetNickname: target?.nickname || null,
+          });
           callback({ success: true });
         } else {
           callback({ success: false, error: '투표 실패' });
@@ -201,14 +211,82 @@ function initSocketServer(httpServer: any): SocketIOServer {
       }
     });
 
-    // 처형 실행
-    socket.on('execute-vote', (callback) => {
+    // 1차 투표 마감 (방장)
+    socket.on('close-day-vote', (callback) => {
       try {
         const { roomCode, playerId } = socket.data;
-        const success = gameEngine.executeDayVote(roomCode, playerId);
+        const result = gameEngine.closeDayVote(roomCode, playerId);
+
+        if (result.success) {
+          console.log(`[Room: ${roomCode}] 1차 투표 마감. 최다득표: ${result.finalVoteTargetNickname || '동률(없음)'}`);
+
+          if (result.finalVoteTarget) {
+            // 최다득표자 있음 → execution 단계로
+            gameEngine.transitionState(roomCode, 'execution', playerId);
+            const roomState = gameEngine.getRoomState(roomCode);
+            io!.to(roomCode).emit('vote-closed', {
+              voteCounts: result.voteCounts,
+              voteEntries: result.voteEntries,
+              finalVoteTarget: result.finalVoteTarget,
+              finalVoteTargetNickname: result.finalVoteTargetNickname,
+              state: 'execution',
+              roomState,
+            });
+          } else {
+            // 동률 → vote 단계 유지, 결과만 공지
+            const roomState = gameEngine.getRoomState(roomCode);
+            io!.to(roomCode).emit('vote-closed', {
+              voteCounts: result.voteCounts,
+              voteEntries: result.voteEntries,
+              finalVoteTarget: null,
+              finalVoteTargetNickname: null,
+              state: 'vote',
+              roomState,
+            });
+          }
+          callback({ success: true });
+        } else {
+          callback({ success: false, error: '투표 마감 실패' });
+        }
+      } catch (error) {
+        console.error('[Socket] 1차 투표 마감 오류:', error);
+        callback({ success: false, error: '투표 마감 오류' });
+      }
+    });
+
+    // 2차 찬반 투표 제출
+    socket.on('final-vote', (data: { choice: 'execute' | 'spare' }, callback) => {
+      try {
+        const { roomCode, playerId } = socket.data;
+        const success = gameEngine.submitFinalVote(roomCode, playerId, data.choice);
 
         if (success) {
-          console.log(`[Room: ${roomCode}] 투표 처리 및 처형`);
+          const room = gameEngine.getRoom(roomCode);
+          const voter = room?.players.get(playerId);
+          console.log(`[Room: ${roomCode}] 찬반 투표: ${voter?.nickname} -> ${data.choice}`);
+          io!.to(roomCode).emit('final-vote-updated', {
+            voterId: playerId,
+            voterNickname: voter?.nickname,
+            choice: data.choice,
+          });
+          callback({ success: true });
+        } else {
+          callback({ success: false, error: '투표 실패' });
+        }
+      } catch (error) {
+        console.error('[Socket] 찬반 투표 오류:', error);
+        callback({ success: false, error: '투표 오류' });
+      }
+    });
+
+    // 2차 찬반 투표 마감 (방장)
+    socket.on('close-final-vote', (callback) => {
+      try {
+        const { roomCode, playerId } = socket.data;
+        const result = gameEngine.closeFinalVote(roomCode, playerId);
+
+        if (result.success) {
+          console.log(`[Room: ${roomCode}] 찬반 투표 마감. 처형: ${result.executed}`);
           const roomState = gameEngine.getRoomState(roomCode);
           const victoryTeam = gameEngine.checkVictoryCondition(roomCode);
           const executionResult = gameEngine.getLastDayExecutionResult(roomCode);
@@ -218,14 +296,13 @@ function initSocketServer(httpServer: any): SocketIOServer {
             victoryTeam,
             executionResult,
           });
-
           callback({ success: true });
         } else {
-          callback({ success: false, error: '처형 실패' });
+          callback({ success: false, error: '마감 실패' });
         }
       } catch (error) {
-        console.error('[Socket] 처형 오류:', error);
-        callback({ success: false, error: '처형 오류' });
+        console.error('[Socket] 찬반 마감 오류:', error);
+        callback({ success: false, error: '마감 오류' });
       }
     });
 

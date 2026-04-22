@@ -1,4 +1,4 @@
-import { Room, Player, Role, GameState, VictoryTeam } from './types';
+import { Room, Player, Role, GameState, VictoryTeam, DayVoteEntry, FinalVoteEntry } from './types';
 import { v4 as uuidv4 } from 'uuid';
 
 class GameEngine {
@@ -32,6 +32,10 @@ class GameEngine {
         policeCheckResult: null,
         policeCheckTarget: null,
         lastDayVoteCounts: [],
+        lastDayVoteEntries: [],
+        lastFinalVoteEntries: [],
+        finalVoteTarget: null,
+        finalVotes: new Map(),
         lastExecutedRole: null,
         lastExecutedNickname: null,
         createdAt: Date.now(),
@@ -163,18 +167,27 @@ class GameEngine {
     // 밤에서 낮으로 전환할 때 투표 결과 처리 (votes 클리어 전에 처리해야 함)
     if (targetState === 'day' && previousState === 'night') {
       this.processNightVotes(roomCode);
-      // 새 낮 시작 → 이전 처형 결과 초기화 (밤 동안 보여줬으므로)
+      // 새 낮 시작 → 이전 처형 결과 초기화
       room.lastDayVoteCounts = [];
+      room.lastDayVoteEntries = [];
+      room.lastFinalVoteEntries = [];
+      room.finalVoteTarget = null;
       room.lastExecutedRole = null;
       room.lastExecutedNickname = null;
     }
 
-    // 낮에서 밤으로 전환할 때 이전 밤 활동 결과만 초기화 (처형 결과는 밤 시작 시 표시하므로 유지)
+    // 밤으로 전환할 때 이전 밤 활동 결과 초기화 (처형 결과는 밤 시작 시 표시하므로 유지)
     if (targetState === 'night') {
       room.savedByDoctor = null;
       room.lastKilledByMafia = null;
       room.policeCheckResult = null;
       room.policeCheckTarget = null;
+    }
+
+    // vote → execution 전환 시 2차 투표 초기화
+    if (targetState === 'execution') {
+      room.finalVotes.clear();
+      room.lastFinalVoteEntries = [];
     }
 
     room.state = targetState;
@@ -296,7 +309,7 @@ class GameEngine {
   }
 
   /**
-   * 낮 투표 제출
+   * 낮 1차 투표 제출 (지목) - 공개 투표
    */
   submitDayVote(roomCode: string, playerId: string, targetId: string | null): boolean {
     const room = this.rooms.get(roomCode);
@@ -311,13 +324,39 @@ class GameEngine {
   }
 
   /**
-   * 낮 투표 결과 처리 및 처형
+   * 낮 1차 투표 마감 → 집계만 하고 최다득표자 결정 (처형 X)
+   * 동률이면 finalVoteTarget = null
+   * 반환: { voteCounts, finalVoteTarget, voteEntries }
    */
-  executeDayVote(roomCode: string, playerId: string): boolean {
+  closeDayVote(roomCode: string, playerId: string): {
+    success: boolean;
+    voteCounts: { playerId: string; nickname: string; votes: number }[];
+    voteEntries: DayVoteEntry[];
+    finalVoteTarget: string | null;
+    finalVoteTargetNickname: string | null;
+  } {
     const room = this.rooms.get(roomCode);
-    if (!room || room.hostId !== playerId) return false;
+    if (!room || room.hostId !== playerId) return { success: false, voteCounts: [], voteEntries: [], finalVoteTarget: null, finalVoteTargetNickname: null };
 
-    // 투표 결과 집계
+    // 공개 투표 내역 생성
+    const voteEntries: DayVoteEntry[] = [];
+    room.dayVotes.forEach((targetId, voterId) => {
+      if (targetId !== null) {
+        const voter = room.players.get(voterId);
+        const target = room.players.get(targetId);
+        if (voter && target) {
+          voteEntries.push({
+            voterId,
+            voterNickname: voter.nickname,
+            targetId,
+            targetNickname: target.nickname,
+          });
+        }
+      }
+    });
+    room.lastDayVoteEntries = voteEntries;
+
+    // 집계
     const voteResults: Map<string, number> = new Map();
     room.dayVotes.forEach((targetId) => {
       if (targetId !== null) {
@@ -325,39 +364,111 @@ class GameEngine {
       }
     });
 
-    // 투표 현황 스냅샷 저장 (닉네임 포함)
-    room.lastDayVoteCounts = Array.from(voteResults.entries())
+    const voteCounts = Array.from(voteResults.entries())
       .map(([pid, votes]) => ({
         playerId: pid,
         nickname: room.players.get(pid)?.nickname || '알 수 없음',
         votes,
       }))
       .sort((a, b) => b.votes - a.votes);
+    room.lastDayVoteCounts = voteCounts;
 
-    // 가장 많은 투표를 받은 플레이어 처형
-    let maxVotes = 0;
-    let executedPlayerId = '';
-    voteResults.forEach((votes, targetId) => {
-      if (votes > maxVotes) {
-        maxVotes = votes;
-        executedPlayerId = targetId;
-      }
-    });
-
-    if (executedPlayerId) {
-      const executed = room.players.get(executedPlayerId);
-      if (executed) {
-        executed.alive = false;
-        room.executedPlayer = executedPlayerId;
-        room.lastExecutedRole = executed.role;
-        room.lastExecutedNickname = executed.nickname;
+    // 최다득표자 결정 (동률이면 null)
+    let finalVoteTarget: string | null = null;
+    if (voteCounts.length > 0) {
+      const topVotes = voteCounts[0].votes;
+      const topCandidates = voteCounts.filter(v => v.votes === topVotes);
+      if (topCandidates.length === 1) {
+        finalVoteTarget = topCandidates[0].playerId;
       }
     }
+    room.finalVoteTarget = finalVoteTarget;
 
     room.dayVotes.clear();
     room.updatedAt = Date.now();
 
+    return {
+      success: true,
+      voteCounts,
+      voteEntries,
+      finalVoteTarget,
+      finalVoteTargetNickname: finalVoteTarget ? room.players.get(finalVoteTarget)?.nickname || null : null,
+    };
+  }
+
+  /**
+   * 2차 처형 찬반 투표 제출
+   */
+  submitFinalVote(roomCode: string, playerId: string, choice: 'execute' | 'spare'): boolean {
+    const room = this.rooms.get(roomCode);
+    if (!room || room.state !== 'execution') return false;
+
+    const player = room.players.get(playerId);
+    if (!player || !player.alive) return false;
+
+    room.finalVotes.set(playerId, choice);
+    room.updatedAt = Date.now();
     return true;
+  }
+
+  /**
+   * 2차 찬반 투표 마감 → 처형 여부 결정
+   * 처형 찬성 > 반대일 때만 처형 (동률이면 살림)
+   */
+  closeFinalVote(roomCode: string, playerId: string): {
+    success: boolean;
+    executed: boolean;
+    finalVoteEntries: FinalVoteEntry[];
+    executedNickname: string | null;
+    executedRole: string | null;
+  } {
+    const room = this.rooms.get(roomCode);
+    if (!room || room.hostId !== playerId) return { success: false, executed: false, finalVoteEntries: [], executedNickname: null, executedRole: null };
+
+    const targetId = room.finalVoteTarget;
+
+    // 공개 투표 내역
+    const finalVoteEntries: FinalVoteEntry[] = [];
+    room.finalVotes.forEach((choice, voterId) => {
+      const voter = room.players.get(voterId);
+      if (voter) {
+        finalVoteEntries.push({ voterId, voterNickname: voter.nickname, choice });
+      }
+    });
+    room.lastFinalVoteEntries = finalVoteEntries;
+
+    let executed = false;
+    if (targetId) {
+      const executeCount = finalVoteEntries.filter(e => e.choice === 'execute').length;
+      const spareCount = finalVoteEntries.filter(e => e.choice === 'spare').length;
+      // 처형 찬성 > 반대일 때만 처형 (동률 → 살림)
+      if (executeCount > spareCount) {
+        const target = room.players.get(targetId);
+        if (target) {
+          target.alive = false;
+          room.executedPlayer = targetId;
+          room.lastExecutedRole = target.role;
+          room.lastExecutedNickname = target.nickname;
+          executed = true;
+        }
+      }
+    }
+
+    if (!executed) {
+      room.lastExecutedRole = null;
+      room.lastExecutedNickname = null;
+    }
+
+    room.finalVotes.clear();
+    room.updatedAt = Date.now();
+
+    return {
+      success: true,
+      executed,
+      finalVoteEntries,
+      executedNickname: room.lastExecutedNickname,
+      executedRole: room.lastExecutedRole,
+    };
   }
 
   /**
@@ -368,6 +479,10 @@ class GameEngine {
     if (!room) return null;
     return {
       voteCounts: room.lastDayVoteCounts,
+      voteEntries: room.lastDayVoteEntries,
+      finalVoteEntries: room.lastFinalVoteEntries,
+      finalVoteTarget: room.finalVoteTarget,
+      finalVoteTargetNickname: room.finalVoteTarget ? room.players.get(room.finalVoteTarget)?.nickname || null : null,
       executedNickname: room.lastExecutedNickname,
       executedRole: room.lastExecutedRole,
     };
