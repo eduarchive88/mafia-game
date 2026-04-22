@@ -56,6 +56,13 @@ class GameEngine {
         savedByDoctor: null,
         policeCheckResult: null,
         policeCheckTarget: null,
+        lastDayVoteCounts: [],
+        lastDayVoteEntries: [],
+        lastFinalVoteEntries: [],
+        finalVoteTarget: null,
+        finalVotes: new Map(),
+        lastExecutedRole: null,
+        lastExecutedNickname: null,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -198,6 +205,30 @@ class GameEngine {
     const room = this.rooms.get(roomCode);
     if (!room || room.hostId !== playerId) return false;
 
+    const previousState = room.state;
+
+    if (targetState === 'day' && previousState === 'night') {
+      this.processNightVotes(roomCode);
+      room.lastDayVoteCounts = [];
+      room.lastDayVoteEntries = [];
+      room.lastFinalVoteEntries = [];
+      room.finalVoteTarget = null;
+      room.lastExecutedRole = null;
+      room.lastExecutedNickname = null;
+    }
+
+    if (targetState === 'night') {
+      room.savedByDoctor = null;
+      room.lastKilledByMafia = null;
+      room.policeCheckResult = null;
+      room.policeCheckTarget = null;
+    }
+
+    if (targetState === 'execution') {
+      room.finalVotes.clear();
+      room.lastFinalVoteEntries = [];
+    }
+
     room.state = targetState;
     room.voteInProgress = false;
     room.nightVotes.clear();
@@ -205,10 +236,6 @@ class GameEngine {
     room.selectedTarget = null;
     room.votingStartTime = Date.now();
     room.updatedAt = Date.now();
-
-    if (targetState === 'day' && room.state === 'night') {
-      this.processNightVotes(roomCode);
-    }
 
     return true;
   }
@@ -296,6 +323,128 @@ class GameEngine {
     return true;
   }
 
+  closeDayVote(roomCode, playerId) {
+    const room = this.rooms.get(roomCode);
+    if (!room || room.hostId !== playerId || room.state !== 'vote') {
+      return { success: false, voteCounts: [], voteEntries: [], finalVoteTarget: null, finalVoteTargetNickname: null };
+    }
+
+    const voteEntries = [];
+    room.dayVotes.forEach((targetId, voterId) => {
+      if (targetId !== null) {
+        const voter = room.players.get(voterId);
+        const target = room.players.get(targetId);
+        if (voter && target) {
+          voteEntries.push({
+            voterId,
+            voterNickname: voter.nickname,
+            targetId,
+            targetNickname: target.nickname,
+          });
+        }
+      }
+    });
+    room.lastDayVoteEntries = voteEntries;
+
+    const voteResults = new Map();
+    room.dayVotes.forEach((targetId) => {
+      if (targetId !== null) {
+        voteResults.set(targetId, (voteResults.get(targetId) || 0) + 1);
+      }
+    });
+
+    const voteCounts = Array.from(voteResults.entries())
+      .map(([pid, votes]) => ({
+        playerId: pid,
+        nickname: room.players.get(pid)?.nickname || '알 수 없음',
+        votes,
+      }))
+      .sort((a, b) => b.votes - a.votes);
+    room.lastDayVoteCounts = voteCounts;
+
+    let finalVoteTarget = null;
+    if (voteCounts.length > 0) {
+      const topVotes = voteCounts[0].votes;
+      const topCandidates = voteCounts.filter((entry) => entry.votes === topVotes);
+      if (topCandidates.length === 1) {
+        finalVoteTarget = topCandidates[0].playerId;
+      }
+    }
+    room.finalVoteTarget = finalVoteTarget;
+
+    room.dayVotes.clear();
+    room.updatedAt = Date.now();
+
+    return {
+      success: true,
+      voteCounts,
+      voteEntries,
+      finalVoteTarget,
+      finalVoteTargetNickname: finalVoteTarget ? room.players.get(finalVoteTarget)?.nickname || null : null,
+    };
+  }
+
+  submitFinalVote(roomCode, playerId, choice) {
+    const room = this.rooms.get(roomCode);
+    if (!room || room.state !== 'execution') return false;
+
+    const player = room.players.get(playerId);
+    if (!player || !player.alive) return false;
+
+    room.finalVotes.set(playerId, choice);
+    room.updatedAt = Date.now();
+    return true;
+  }
+
+  closeFinalVote(roomCode, playerId) {
+    const room = this.rooms.get(roomCode);
+    if (!room || room.hostId !== playerId) {
+      return { success: false, executed: false, finalVoteEntries: [], executedNickname: null, executedRole: null };
+    }
+
+    const targetId = room.finalVoteTarget;
+    const finalVoteEntries = [];
+    room.finalVotes.forEach((choice, voterId) => {
+      const voter = room.players.get(voterId);
+      if (voter) {
+        finalVoteEntries.push({ voterId, voterNickname: voter.nickname, choice });
+      }
+    });
+    room.lastFinalVoteEntries = finalVoteEntries;
+
+    let executed = false;
+    if (targetId) {
+      const executeCount = finalVoteEntries.filter((entry) => entry.choice === 'execute').length;
+      const spareCount = finalVoteEntries.filter((entry) => entry.choice === 'spare').length;
+      if (executeCount > spareCount) {
+        const target = room.players.get(targetId);
+        if (target) {
+          target.alive = false;
+          room.executedPlayer = targetId;
+          room.lastExecutedRole = target.role;
+          room.lastExecutedNickname = target.nickname;
+          executed = true;
+        }
+      }
+    }
+
+    if (!executed) {
+      room.lastExecutedRole = null;
+      room.lastExecutedNickname = null;
+    }
+
+    room.finalVotes.clear();
+    room.updatedAt = Date.now();
+
+    return {
+      success: true,
+      executed,
+      finalVoteEntries,
+      executedNickname: room.lastExecutedNickname,
+      executedRole: room.lastExecutedRole,
+    };
+  }
+
   executeDayVote(roomCode, playerId) {
     const room = this.rooms.get(roomCode);
     if (!room || room.hostId !== playerId) return false;
@@ -375,6 +524,7 @@ class GameEngine {
     if (!room) return null;
 
     const viewers = {};
+    const currentDayVotes = [];
     room.players.forEach((player, playerId) => {
       viewers[playerId] = {
         id: playerId,
@@ -385,6 +535,20 @@ class GameEngine {
       };
     });
 
+    room.dayVotes.forEach((targetId, voterId) => {
+      if (targetId === null) return;
+      const voter = room.players.get(voterId);
+      const target = room.players.get(targetId);
+      if (voter && target) {
+        currentDayVotes.push({
+          voterId,
+          voterNickname: voter.nickname,
+          targetId,
+          targetNickname: target.nickname,
+        });
+      }
+    });
+
     return {
       sessionCode: room.sessionCode,
       hostId: room.hostId,
@@ -393,10 +557,26 @@ class GameEngine {
       victoryTeam: room.victoryTeam,
       players: viewers,
       voteInProgress: room.voteInProgress,
+      currentDayVotes,
       executedPlayer: room.executedPlayer,
       lastKilledByMafia: room.lastKilledByMafia,
       policeCheckResult: viewerId && room.players.get(viewerId)?.role === 'police' ? room.policeCheckResult : null,
       policeCheckTarget: viewerId && room.players.get(viewerId)?.role === 'police' ? room.policeCheckTarget : null,
+    };
+  }
+
+  getLastDayExecutionResult(roomCode) {
+    const room = this.rooms.get(roomCode);
+    if (!room) return null;
+
+    return {
+      voteCounts: room.lastDayVoteCounts,
+      voteEntries: room.lastDayVoteEntries,
+      finalVoteEntries: room.lastFinalVoteEntries,
+      finalVoteTarget: room.finalVoteTarget,
+      finalVoteTargetNickname: room.finalVoteTarget ? room.players.get(room.finalVoteTarget)?.nickname || null : null,
+      executedNickname: room.lastExecutedNickname,
+      executedRole: room.lastExecutedRole,
     };
   }
 }
@@ -608,7 +788,11 @@ io.on('connection', (socket) => {
       const success = gameEngine.submitDayVote(roomCode, playerId, data.targetId);
 
       if (success) {
-        console.log(`[Room: ${roomCode}] 낮 투표: ${playerId} -> ${data.targetId || '투표 안함'}`);
+        const room = gameEngine.getRoom(roomCode);
+        const voter = room?.players.get(playerId);
+        const target = data.targetId ? room?.players.get(data.targetId) : null;
+        console.log(`[Room: ${roomCode}] 낮 투표: ${voter?.nickname} -> ${target?.nickname || '없음'}`);
+        io.to(roomCode).emit('room-updated', gameEngine.getRoomState(roomCode));
         callback({ success: true });
       } else {
         callback({ success: false, error: '투표 실패' });
@@ -619,29 +803,106 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 처형 실행
-  socket.on('execute-vote', (callback) => {
+  // 1차 투표 마감 (방장)
+  socket.on('close-day-vote', (_data, callback) => {
+    try {
+      if (typeof callback !== 'function') {
+        console.error('[Socket] close-day-vote: callback이 함수가 아님');
+        return;
+      }
+      const { roomCode, playerId } = socket.data;
+      const result = gameEngine.closeDayVote(roomCode, playerId);
+
+      if (result.success) {
+        console.log(`[Room: ${roomCode}] 1차 투표 마감. 최다득표: ${result.finalVoteTargetNickname || '동률(없음)'}`);
+        if (result.finalVoteTarget) {
+          gameEngine.transitionState(roomCode, 'execution', playerId);
+          const roomState = gameEngine.getRoomState(roomCode);
+          io.to(roomCode).emit('state-changed', {
+            state: 'execution',
+            roomState,
+          });
+          io.to(roomCode).emit('vote-closed', {
+            voteCounts: result.voteCounts,
+            voteEntries: result.voteEntries,
+            finalVoteTarget: result.finalVoteTarget,
+            finalVoteTargetNickname: result.finalVoteTargetNickname,
+            state: 'execution',
+            roomState,
+          });
+        } else {
+          io.to(roomCode).emit('vote-closed', {
+            voteCounts: result.voteCounts,
+            voteEntries: result.voteEntries,
+            finalVoteTarget: null,
+            finalVoteTargetNickname: null,
+            state: 'vote',
+            roomState: gameEngine.getRoomState(roomCode),
+          });
+        }
+        callback({ success: true });
+      } else {
+        callback({ success: false, error: '투표 마감 실패' });
+      }
+    } catch (error) {
+      console.error('[Socket] 1차 투표 마감 오류:', error);
+      callback({ success: false, error: '투표 마감 오류' });
+    }
+  });
+
+  // 2차 찬반 투표 제출
+  socket.on('final-vote', (data, callback) => {
     try {
       const { roomCode, playerId } = socket.data;
-      const success = gameEngine.executeDayVote(roomCode, playerId);
+      const success = gameEngine.submitFinalVote(roomCode, playerId, data.choice);
 
       if (success) {
-        console.log(`[Room: ${roomCode}] 투표 처리 및 처형`);
+        const room = gameEngine.getRoom(roomCode);
+        const voter = room?.players.get(playerId);
+        console.log(`[Room: ${roomCode}] 찬반 투표: ${voter?.nickname} -> ${data.choice}`);
+        io.to(roomCode).emit('final-vote-updated', {
+          voterId: playerId,
+          voterNickname: voter?.nickname,
+          choice: data.choice,
+        });
+        callback({ success: true });
+      } else {
+        callback({ success: false, error: '투표 실패' });
+      }
+    } catch (error) {
+      console.error('[Socket] 찬반 투표 오류:', error);
+      callback({ success: false, error: '투표 오류' });
+    }
+  });
+
+  // 2차 찬반 투표 마감 (방장)
+  socket.on('close-final-vote', (_data, callback) => {
+    try {
+      if (typeof callback !== 'function') {
+        console.error('[Socket] close-final-vote: callback이 함수가 아님');
+        return;
+      }
+      const { roomCode, playerId } = socket.data;
+      const result = gameEngine.closeFinalVote(roomCode, playerId);
+
+      if (result.success) {
+        console.log(`[Room: ${roomCode}] 찬반 투표 마감. 처형: ${result.executed}`);
         const roomState = gameEngine.getRoomState(roomCode);
         const victoryTeam = gameEngine.checkVictoryCondition(roomCode);
+        const executionResult = gameEngine.getLastDayExecutionResult(roomCode);
 
         io.to(roomCode).emit('execution-completed', {
           roomState,
           victoryTeam,
+          executionResult,
         });
-
         callback({ success: true });
       } else {
-        callback({ success: false, error: '처형 실패' });
+        callback({ success: false, error: '마감 실패' });
       }
     } catch (error) {
-      console.error('[Socket] 처형 오류:', error);
-      callback({ success: false, error: '처형 오류' });
+      console.error('[Socket] 찬반 마감 오류:', error);
+      callback({ success: false, error: '마감 오류' });
     }
   });
 
