@@ -311,6 +311,26 @@ class GameEngine {
     room.nightVotes.clear();
   }
 
+  getLastNightResult(roomCode) {
+    const room = this.rooms.get(roomCode);
+    if (!room) {
+      return { type: 'nobody', victimName: null, doctorSucceeded: false };
+    }
+
+    if (!room.lastKilledByMafia) {
+      return { type: 'nobody', victimName: null, doctorSucceeded: false };
+    }
+
+    const victim = room.players.get(room.lastKilledByMafia);
+    const victimName = victim?.nickname || '알 수 없음';
+
+    if (room.savedByDoctor && room.savedByDoctor === room.lastKilledByMafia) {
+      return { type: 'saved', victimName, doctorSucceeded: true };
+    }
+
+    return { type: 'killed', victimName, doctorSucceeded: false };
+  }
+
   submitDayVote(roomCode, playerId, targetId) {
     const room = this.rooms.get(roomCode);
     if (!room || room.state !== 'vote') return false;
@@ -678,6 +698,7 @@ io.on('connection', (socket) => {
   socket.on('transition-state', (data, callback) => {
     try {
       const { roomCode, playerId } = socket.data;
+      const previousState = gameEngine.getRoom(roomCode)?.state;
       const success = gameEngine.transitionState(roomCode, data.targetState, playerId);
 
       if (success) {
@@ -688,6 +709,17 @@ io.on('connection', (socket) => {
           state: data.targetState,
           roomState,
         });
+
+        if (data.targetState === 'day' && previousState === 'night') {
+          io.to(roomCode).emit('night-result', gameEngine.getLastNightResult(roomCode));
+        }
+
+        if (data.targetState === 'night') {
+          const executionResult = gameEngine.getLastDayExecutionResult(roomCode);
+          if (executionResult?.voteEntries?.length || executionResult?.finalVoteEntries?.length || executionResult?.executedNickname) {
+            io.to(roomCode).emit('execution-result-night', executionResult);
+          }
+        }
 
         callback({ success: true });
       } else {

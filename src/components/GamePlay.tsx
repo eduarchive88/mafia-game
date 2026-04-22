@@ -27,7 +27,11 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
   const [policeResult, setPoliceResult] = useState<{ isMafia: boolean } | null>(null);
   const [teammates, setTeammates] = useState<{ id: string; nickname: string }[]>([]);
   const [connectionToast, setConnectionToast] = useState<{ message: string; type: 'dc' | 'rc' } | null>(null);
-  const [nightResult, setNightResult] = useState<{ type: 'killed'; victimName: string } | { type: 'saved' } | { type: 'nobody' } | null>(null);
+  const [nightResult, setNightResult] = useState<{
+    type: 'killed' | 'saved' | 'nobody';
+    victimName?: string | null;
+    doctorSucceeded?: boolean;
+  } | null>(null);
   const [executionResult, setExecutionResult] = useState<{
     voteCounts: { playerId: string; nickname: string; votes: number }[];
     voteEntries: { voterId: string; voterNickname: string; targetId: string; targetNickname: string }[];
@@ -171,7 +175,7 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
 
   // 밤 결과 공지 이벤트
   useEffect(() => {
-    socket?.on('night-result', (data: { type: string; victimName?: string }) => {
+    socket?.on('night-result', (data: { type: string; victimName?: string | null; doctorSucceeded?: boolean }) => {
       setNightResult(data as any);
     });
     socket?.on('execution-result-night', (data: any) => {
@@ -550,9 +554,21 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
                 : 'bg-gray-900 border-gray-700 text-gray-400'
           }`}>
             {nightResult.type === 'killed' && (
-              <>☠️ 무고한 시민 <span className="underline">{(nightResult as any).victimName}</span>이(가) 죽었습니다.</>
+              <>
+                <div>☠️ 무고한 시민 <span className="underline">{(nightResult as any).victimName}</span>이(가) 마피아에 의해 죽었습니다.</div>
+                <div className="text-sm font-normal mt-1 text-red-300">💊 의사는 시민을 살리지 못했습니다.</div>
+              </>
             )}
-            {nightResult.type === 'saved' && '💊 의사가 시민을 살렸습니다!'}
+            {nightResult.type === 'saved' && (
+              <>
+                <div>💊 의사가 시민을 살렸습니다!</div>
+                {(nightResult as any).victimName && (
+                  <div className="text-sm font-normal mt-1 text-cyan-300">
+                    마피아의 표적은 <span className="underline">{(nightResult as any).victimName}</span>이었습니다.
+                  </div>
+                )}
+              </>
+            )}
             {nightResult.type === 'nobody' && '🌅 조용한 밤이었습니다. 아무도 죽지 않았습니다.'}
           </div>
         )}
