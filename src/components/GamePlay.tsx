@@ -562,11 +562,6 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
             {nightResult.type === 'saved' && (
               <>
                 <div>💊 의사가 시민을 살렸습니다!</div>
-                {(nightResult as any).victimName && (
-                  <div className="text-sm font-normal mt-1 text-cyan-300">
-                    마피아의 표적은 <span className="underline">{(nightResult as any).victimName}</span>이었습니다.
-                  </div>
-                )}
               </>
             )}
             {nightResult.type === 'nobody' && '🌅 조용한 밤이었습니다. 아무도 죽지 않았습니다.'}

@@ -325,7 +325,7 @@ class GameEngine {
     const victimName = victim?.nickname || '알 수 없음';
 
     if (room.savedByDoctor && room.savedByDoctor === room.lastKilledByMafia) {
-      return { type: 'saved', victimName, doctorSucceeded: true };
+      return { type: 'saved', victimName: null, doctorSucceeded: true };
     }
 
     return { type: 'killed', victimName, doctorSucceeded: false };
