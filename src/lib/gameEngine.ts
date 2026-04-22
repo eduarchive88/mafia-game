@@ -155,6 +155,21 @@ class GameEngine {
     const room = this.rooms.get(roomCode);
     if (!room || room.hostId !== playerId) return false;
 
+    const previousState = room.state;
+
+    // 밤에서 낮으로 전환할 때 투표 결과 처리 (votes 클리어 전에 처리해야 함)
+    if (targetState === 'day' && previousState === 'night') {
+      this.processNightVotes(roomCode);
+    }
+
+    // 낮에서 밤으로 전환할 때 이전 밤 결과 초기화
+    if (targetState === 'night') {
+      room.savedByDoctor = null;
+      room.lastKilledByMafia = null;
+      room.policeCheckResult = null;
+      room.policeCheckTarget = null;
+    }
+
     room.state = targetState;
     room.voteInProgress = false;
     room.nightVotes.clear();
@@ -163,12 +178,27 @@ class GameEngine {
     room.votingStartTime = Date.now();
     room.updatedAt = Date.now();
 
-    // 밤에서 낮으로 전환할 때 투표 결과 처리
-    if (targetState === 'day' && room.state === 'night') {
-      this.processNightVotes(roomCode);
+    return true;
+  }
+
+  /**
+   * 직전 밤 결과 반환 (클라이언트에 공지용)
+   */
+  getLastNightResult(roomCode: string): { type: 'killed'; victimName: string } | { type: 'saved' } | { type: 'nobody' } {
+    const room = this.rooms.get(roomCode);
+    if (!room) return { type: 'nobody' };
+
+    const killedId = room.lastKilledByMafia;
+    const savedId = room.savedByDoctor;
+
+    if (!killedId) return { type: 'nobody' };
+
+    if (killedId === savedId) {
+      return { type: 'saved' };
     }
 
-    return true;
+    const victim = room.players.get(killedId);
+    return { type: 'killed', victimName: victim?.nickname || '알 수 없음' };
   }
 
   /**

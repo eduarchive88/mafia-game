@@ -88,6 +88,7 @@ function initSocketServer(httpServer: any): SocketIOServer {
     socket.on('transition-state', (data: { targetState: string }, callback) => {
       try {
         const { roomCode, playerId } = socket.data;
+        const previousState = gameEngine.getRoom(roomCode)?.state;
         const success = gameEngine.transitionState(roomCode, data.targetState as any, playerId);
 
         if (success) {
@@ -99,6 +100,12 @@ function initSocketServer(httpServer: any): SocketIOServer {
             state: data.targetState,
             roomState,
           });
+
+          // 밤 → 낮 전환 시 밤 결과 공지
+          if (data.targetState === 'day' && previousState === 'night') {
+            const nightResult = gameEngine.getLastNightResult(roomCode);
+            io!.to(roomCode).emit('night-result', nightResult);
+          }
 
           callback({ success: true });
         } else {

@@ -27,6 +27,7 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
   const [policeResult, setPoliceResult] = useState<{ isMafia: boolean } | null>(null);
   const [teammates, setTeammates] = useState<{ id: string; nickname: string }[]>([]);
   const [connectionToast, setConnectionToast] = useState<{ message: string; type: 'dc' | 'rc' } | null>(null);
+  const [nightResult, setNightResult] = useState<{ type: 'killed'; victimName: string } | { type: 'saved' } | { type: 'nobody' } | null>(null);
 
   // 역할 완료 사운드 (Web Audio API)
   const playRoleSound = (role: string) => {
@@ -113,6 +114,8 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
       // 밤/낙 전환 시 밤 상태 초기화
       setNightStatus({ mafia: false, doctor: false, police: false });
       setPoliceResult(null);
+      // 낮→밤 전환 시 밤 결과 배너 초기화
+      if (data.state === 'night') setNightResult(null);
     });
 
     return () => {
@@ -130,6 +133,16 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
       socket?.off('role-completed');
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket]);
+
+  // 밤 결과 공지 이벤트
+  useEffect(() => {
+    socket?.on('night-result', (data: { type: string; victimName?: string }) => {
+      setNightResult(data as any);
+    });
+    return () => {
+      socket?.off('night-result');
+    };
   }, [socket]);
 
   // 단절/재연결 알림
@@ -328,6 +341,23 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
         {winner && (
           <div className="bg-green-900 border border-green-700 rounded-lg p-4 mb-6 text-center">
             <p className="text-2xl font-bold">{winner} 승리!</p>
+          </div>
+        )}
+
+        {/* 밤 결과 공지 배너 */}
+        {nightResult && gameState === 'day' && (
+          <div className={`rounded-lg p-4 mb-6 text-center font-bold text-lg border transition-all ${
+            nightResult.type === 'killed'
+              ? 'bg-red-950 border-red-700 text-red-200'
+              : nightResult.type === 'saved'
+                ? 'bg-cyan-950 border-cyan-700 text-cyan-200'
+                : 'bg-gray-900 border-gray-700 text-gray-400'
+          }`}>
+            {nightResult.type === 'killed' && (
+              <>☠️ 무고한 시민 <span className="underline">{(nightResult as any).victimName}</span>이(가) 죽었습니다.</>
+            )}
+            {nightResult.type === 'saved' && '💊 의사가 시민을 살렸습니다!'}
+            {nightResult.type === 'nobody' && '🌅 조용한 밤이었습니다. 아무도 죽지 않았습니다.'}
           </div>
         )}
 
