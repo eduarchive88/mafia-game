@@ -116,12 +116,15 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
       setPlayers(Object.values(data.roomState?.players || {}));
       setSelectedTarget(null);
       setHasVoted(false);
-      // 밤/낙 전환 시 밤 상태 초기화
+      // 밤/낮 전환 시 밤 상태 초기화
       setNightStatus({ mafia: false, doctor: false, police: false });
       setPoliceResult(null);
-      // 낮→밤 전환 시 밤 결과 배너 초기화
+      // 낮→밤: 밤 결과 배너 초기화 (처형 결과는 밤 시작 시 보여야 하므로 유지)
       if (data.state === 'night') {
         setNightResult(null);
+      }
+      // 밤→낮: 처형 결과 초기화 (새 낮이 시작되므로)
+      if (data.state === 'day') {
         setExecutionResult(null);
       }
     });
@@ -148,8 +151,13 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
     socket?.on('night-result', (data: { type: string; victimName?: string }) => {
       setNightResult(data as any);
     });
+    // 밤 시작 시 처형 결과 재수신 (재연결 플레이어 포함)
+    socket?.on('execution-result-night', (data: any) => {
+      setExecutionResult(data);
+    });
     return () => {
       socket?.off('night-result');
+      socket?.off('execution-result-night');
     };
   }, [socket]);
 
@@ -327,8 +335,35 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
               </p>
             </div>
             {isHost && gameState !== 'ended' && (
-              <div className="space-x-2">
+              <div className="flex flex-wrap gap-2">
+                {/* 낮: 투표 시작 버튼 */}
                 {gameState === 'day' && (
+                  <button
+                    onClick={() => socket?.emit('transition-state', { targetState: 'vote' }, () => {})}
+                    className="px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded transition font-semibold"
+                  >
+                    🗳️ 투표 시작
+                  </button>
+                )}
+                {/* 투표 중 & 처형 전: 처형 실행 + 토론으로 돌아가기 */}
+                {gameState === 'vote' && !executionResult && (
+                  <>
+                    <button
+                      onClick={() => socket?.emit('execute-vote', (r: any) => { if (!r?.success) {} })}
+                      className="px-4 py-2 bg-red-700 hover:bg-red-600 rounded transition font-semibold"
+                    >
+                      ⚖️ 처형 실행
+                    </button>
+                    <button
+                      onClick={() => socket?.emit('transition-state', { targetState: 'day' }, () => {})}
+                      className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition font-semibold text-sm"
+                    >
+                      ↩️ 토론으로
+                    </button>
+                  </>
+                )}
+                {/* 처형 완료 후: 밤으로 */}
+                {gameState === 'vote' && executionResult && (
                   <button
                     onClick={() => socket?.emit('transition-state', { targetState: 'night' }, () => {})}
                     className="px-4 py-2 bg-indigo-700 hover:bg-indigo-600 rounded transition font-semibold"
@@ -336,6 +371,7 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
                     🌙 밤으로
                   </button>
                 )}
+                {/* 밤: 낮으로 */}
                 {gameState === 'night' && (
                   <button
                     onClick={() => socket?.emit('transition-state', { targetState: 'day' }, () => {})}
@@ -355,8 +391,8 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
           </div>
         )}
 
-        {/* 낮 처형 결과 공지 배너 (처형 후 ~ 밤 전환 전까지 표시) */}
-        {executionResult && gameState !== 'night' && gameState !== 'waiting' && (
+        {/* 낮 처형 결과 공지 배너 (처형 후 ~ 다음 낮 전까지 표시: vote 상태 + 밤 시작 시) */}
+        {executionResult && gameState !== 'waiting' && (
           <div className={`rounded-lg p-5 mb-6 border ${
             executionResult.executedRole === 'mafia'
               ? 'bg-green-950 border-green-700'
@@ -424,8 +460,8 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
           </div>
         )}
 
-        {/* 밤 결과 공지 배너 */}
-        {nightResult && gameState === 'day' && (
+        {/* 밤 결과 공지 배너 (낮 + 투표 단계에서 표시) */}
+        {nightResult && (gameState === 'day' || gameState === 'vote') && (
           <div className={`rounded-lg p-4 mb-6 text-center font-bold text-lg border transition-all ${
             nightResult.type === 'killed'
               ? 'bg-red-950 border-red-700 text-red-200'
@@ -438,6 +474,37 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
             )}
             {nightResult.type === 'saved' && '💊 의사가 시민을 살렸습니다!'}
             {nightResult.type === 'nobody' && '🌅 조용한 밤이었습니다. 아무도 죽지 않았습니다.'}
+          </div>
+        )}
+
+        {/* 낮 토론 / 투표 안내 패널 */}
+        {(gameState === 'day' || gameState === 'vote') && !winner && (
+          <div className="bg-amber-950/60 border border-amber-800 rounded-lg p-4 mb-6">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-xl">{gameState === 'vote' ? '🗳️' : '☀️'}</span>
+              <h3 className="text-lg font-bold text-amber-300">
+                {gameState === 'day' ? '낮 — 토론 시간' : '낮 — 투표 시간'}
+              </h3>
+            </div>
+            {gameState === 'day' && (
+              <p className="text-gray-300 text-sm">마피아를 찾아 토론하세요. 방장이 <span className="text-amber-300 font-semibold">🗳️ 투표 시작</span>을 누르면 투표가 시작됩니다.</p>
+            )}
+            {gameState === 'vote' && (
+              <div>
+                {isAlive && !hasVoted && (
+                  <p className="text-gray-300 text-sm">아래 생존 플레이어 목록에서 <span className="text-red-300 font-semibold">처형할 대상</span>을 선택하세요.</p>
+                )}
+                {isAlive && hasVoted && (
+                  <p className="text-green-400 text-sm">✅ 투표 완료! 다른 플레이어의 투표를 기다리는 중...</p>
+                )}
+                {!isAlive && (
+                  <p className="text-gray-500 text-sm">☠️ 사망한 상태입니다. 결과를 기다리세요.</p>
+                )}
+                {isHost && (
+                  <p className="text-amber-400 text-sm mt-2">📢 방장: 투표가 완료되면 <span className="font-semibold">⚖️ 처형 실행</span>을 눌러 결과를 공개하세요.</p>
+                )}
+              </div>
+            )}
           </div>
         )}
 

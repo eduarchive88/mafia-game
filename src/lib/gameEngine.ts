@@ -163,17 +163,18 @@ class GameEngine {
     // 밤에서 낮으로 전환할 때 투표 결과 처리 (votes 클리어 전에 처리해야 함)
     if (targetState === 'day' && previousState === 'night') {
       this.processNightVotes(roomCode);
+      // 새 낮 시작 → 이전 처형 결과 초기화 (밤 동안 보여줬으므로)
+      room.lastDayVoteCounts = [];
+      room.lastExecutedRole = null;
+      room.lastExecutedNickname = null;
     }
 
-    // 낮에서 밤으로 전환할 때 이전 낮/밤 결과 초기화
+    // 낮에서 밤으로 전환할 때 이전 밤 활동 결과만 초기화 (처형 결과는 밤 시작 시 표시하므로 유지)
     if (targetState === 'night') {
       room.savedByDoctor = null;
       room.lastKilledByMafia = null;
       room.policeCheckResult = null;
       room.policeCheckTarget = null;
-      room.lastDayVoteCounts = [];
-      room.lastExecutedRole = null;
-      room.lastExecutedNickname = null;
     }
 
     room.state = targetState;

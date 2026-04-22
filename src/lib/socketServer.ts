@@ -107,6 +107,14 @@ function initSocketServer(httpServer: any): SocketIOServer {
             io!.to(roomCode).emit('night-result', nightResult);
           }
 
+          // vote/day → 밤 전환 시 처형 결과 재전송 (재연결 플레이어 포함 모두에게)
+          if (data.targetState === 'night') {
+            const executionResult = gameEngine.getLastDayExecutionResult(roomCode);
+            if (executionResult?.executedNickname) {
+              io!.to(roomCode).emit('execution-result-night', executionResult);
+            }
+          }
+
           callback({ success: true });
         } else {
           callback({ success: false, error: '상태 전환 실패' });
