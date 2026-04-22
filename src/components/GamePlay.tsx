@@ -49,7 +49,8 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
     finalVoteTargetNickname: string | null;
   } | null>(null);
 
-  // 역할 완료 사운드 (Web Audio API)
+  const [voteCloseError, setVoteCloseError] = useState<string | null>(null);
+  const [finalVoteCloseError, setFinalVoteCloseError] = useState<string | null>(null);
   const playRoleSound = (role: string) => {
     try {
       const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
@@ -395,7 +396,14 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
                 {/* 투표 단계: 1차 투표 마감 */}
                 {gameState === 'vote' && (
                   <button
-                    onClick={() => socket?.emit('close-day-vote', (r: any) => {})}
+                    onClick={() => {
+                      setVoteCloseError(null);
+                      socket?.emit('close-day-vote', (r: any) => {
+                        if (!r?.success) {
+                          setVoteCloseError(r?.error || '투표 마감 실패 — 다시 시도하세요');
+                        }
+                      });
+                    }}
                     className="px-4 py-2 bg-red-700 hover:bg-red-600 rounded transition font-semibold"
                   >
                     ⚖️ 투표 마감
@@ -404,7 +412,14 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
                 {/* 처형 단계: 2차 찬반 마감 */}
                 {gameState === 'execution' && (
                   <button
-                    onClick={() => socket?.emit('close-final-vote', (r: any) => {})}
+                    onClick={() => {
+                      setFinalVoteCloseError(null);
+                      socket?.emit('close-final-vote', (r: any) => {
+                        if (!r?.success) {
+                          setFinalVoteCloseError(r?.error || '찬반 마감 실패 — 다시 시도하세요');
+                        }
+                      });
+                    }}
                     className="px-4 py-2 bg-red-900 hover:bg-red-800 rounded transition font-semibold"
                   >
                     💀 찬반 마감
@@ -555,8 +570,46 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
             {!isAlive && (
               <p className="text-gray-500 text-sm mb-3">☠️ 사망한 상태입니다. 결과를 기다리세요.</p>
             )}
-            {/* 실시간 투표 현황 */}
-            {liveVotes.length > 0 && (
+
+            {/* 방장: 투표 현황 (누가 했는지 / 안 했는지) */}
+            {isHost && (() => {
+              const votedIds = new Set(liveVotes.map(v => v.voterId));
+              const alivePlayers = players.filter(p => p.alive);
+              const notYet = alivePlayers.filter(p => !votedIds.has(p.id));
+              return (
+                <div className="mb-3 p-3 bg-amber-900/40 rounded border border-amber-700">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-bold text-amber-300">📊 투표 현황 ({votedIds.size}/{alivePlayers.length}명)</span>
+                  </div>
+                  {notYet.length > 0 && (
+                    <div className="mb-1">
+                      <span className="text-xs text-gray-400">미투표: </span>
+                      {notYet.map(p => (
+                        <span key={p.id} className="inline-block mr-1 px-2 py-0.5 bg-gray-700 rounded text-xs text-gray-300">
+                          {p.nickname}{p.id === playerId ? ' (나)' : ''}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {liveVotes.length > 0 && (
+                    <div>
+                      <span className="text-xs text-gray-400">투표 완료: </span>
+                      {liveVotes.map(v => (
+                        <span key={v.voterId} className="inline-block mr-1 px-2 py-0.5 bg-green-900 rounded text-xs text-green-300">
+                          {v.voterNickname} → {v.targetNickname}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {notYet.length === 0 && alivePlayers.length > 0 && (
+                    <p className="text-xs text-green-400 font-semibold">✅ 모두 투표 완료!</p>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* 일반 플레이어: 실시간 지목 현황 */}
+            {!isHost && liveVotes.length > 0 && (
               <div className="mt-2">
                 <p className="text-xs text-gray-400 mb-2">실시간 지목 현황</p>
                 <div className="flex flex-wrap gap-2">
@@ -568,8 +621,9 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
                 </div>
               </div>
             )}
-            {isHost && (
-              <p className="text-amber-400 text-sm mt-3">📢 모든 투표가 완료되면 <span className="font-semibold">⚖️ 투표 마감</span>을 누르세요.</p>
+
+            {voteCloseError && (
+              <p className="text-red-400 text-xs mt-2 font-semibold">⚠️ {voteCloseError}</p>
             )}
           </div>
         )}
@@ -633,6 +687,9 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
             )}
             {isHost && (
               <p className="text-amber-400 text-sm text-center mt-3">📢 방장: 모두 투표하면 <span className="font-semibold">💀 찬반 마감</span>을 누르세요.</p>
+            )}
+            {finalVoteCloseError && (
+              <p className="text-red-400 text-xs text-center mt-2 font-semibold">⚠️ {finalVoteCloseError}</p>
             )}
           </div>
         )}

@@ -336,7 +336,9 @@ class GameEngine {
     finalVoteTargetNickname: string | null;
   } {
     const room = this.rooms.get(roomCode);
-    if (!room || room.hostId !== playerId) return { success: false, voteCounts: [], voteEntries: [], finalVoteTarget: null, finalVoteTargetNickname: null };
+    if (!room) return { success: false, voteCounts: [], voteEntries: [], finalVoteTarget: null, finalVoteTargetNickname: null };
+    if (room.hostId !== playerId) return { success: false, voteCounts: [], voteEntries: [], finalVoteTarget: null, finalVoteTargetNickname: null };
+    if (room.state !== 'vote') return { success: false, voteCounts: [], voteEntries: [], finalVoteTarget: null, finalVoteTargetNickname: null };
 
     // 공개 투표 내역 생성
     const voteEntries: DayVoteEntry[] = [];

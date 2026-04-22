@@ -215,15 +215,25 @@ function initSocketServer(httpServer: any): SocketIOServer {
     socket.on('close-day-vote', (callback) => {
       try {
         const { roomCode, playerId } = socket.data;
+        if (!roomCode || !playerId) {
+          console.error('[Socket] close-day-vote: socket.data 누락', socket.data);
+          callback({ success: false, error: '세션 오류 (재입장 필요)' });
+          return;
+        }
         const result = gameEngine.closeDayVote(roomCode, playerId);
 
         if (result.success) {
-          console.log(`[Room: ${roomCode}] 1차 투표 마감. 최다득표: ${result.finalVoteTargetNickname || '동률(없음)'}`);
+          console.log(`[Room: ${roomCode}] 1차 투표 마감. 최다득표: ${result.finalVoteTargetNickname || '동률(없음)'}, 총 투표수: ${result.voteCounts.reduce((s, v) => s + v.votes, 0)}`);
 
           if (result.finalVoteTarget) {
             // 최다득표자 있음 → execution 단계로
             gameEngine.transitionState(roomCode, 'execution', playerId);
             const roomState = gameEngine.getRoomState(roomCode);
+            // state-changed 먼저 → 모든 클라이언트 상태 동기화
+            io!.to(roomCode).emit('state-changed', {
+              state: 'execution',
+              roomState,
+            });
             io!.to(roomCode).emit('vote-closed', {
               voteCounts: result.voteCounts,
               voteEntries: result.voteEntries,
@@ -246,7 +256,9 @@ function initSocketServer(httpServer: any): SocketIOServer {
           }
           callback({ success: true });
         } else {
-          callback({ success: false, error: '투표 마감 실패' });
+          const room = gameEngine.getRoom(roomCode);
+          console.error(`[Socket] close-day-vote 실패: roomCode=${roomCode}, playerId=${playerId}, hostId=${room?.hostId}, state=${room?.state}`);
+          callback({ success: false, error: '투표 마감 실패 (방장 확인 필요)' });
         }
       } catch (error) {
         console.error('[Socket] 1차 투표 마감 오류:', error);
