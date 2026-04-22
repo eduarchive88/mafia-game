@@ -549,6 +549,7 @@ class GameEngine {
     if (!room) return null;
 
     const viewers: Record<string, any> = {};
+    const currentDayVotes: { voterId: string; voterNickname: string; targetId: string; targetNickname: string }[] = [];
     room.players.forEach((player, playerId) => {
       viewers[playerId] = {
         id: playerId,
@@ -556,6 +557,20 @@ class GameEngine {
         alive: player.alive,
         role: viewerId === playerId ? player.role : '?',
       };
+    });
+
+    room.dayVotes.forEach((targetId, voterId) => {
+      if (targetId === null) return;
+      const voter = room.players.get(voterId);
+      const target = room.players.get(targetId);
+      if (voter && target) {
+        currentDayVotes.push({
+          voterId,
+          voterNickname: voter.nickname,
+          targetId,
+          targetNickname: target.nickname,
+        });
+      }
     });
 
     return {
@@ -566,6 +581,7 @@ class GameEngine {
       victoryTeam: room.victoryTeam,
       players: viewers,
       voteInProgress: room.voteInProgress,
+      currentDayVotes,
       executedPlayer: room.executedPlayer,
       lastKilledByMafia: room.lastKilledByMafia,
       policeCheckResult: viewerId && room.players.get(viewerId)?.role === 'police' ? room.policeCheckResult : null,

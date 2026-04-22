@@ -88,6 +88,10 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
     if (roomState) {
       setPlayers(Object.values(roomState.players || {}));
       setGameState(roomState.state);
+      setLiveVotes(roomState.currentDayVotes || []);
+      if (roomState.state === 'vote') {
+        setHasVoted((roomState.currentDayVotes || []).some((vote: any) => vote.voterId === playerId));
+      }
       if (roomState.victoryTeam) {
         setWinner(roomState.victoryTeam);
       }
@@ -173,10 +177,6 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
     socket?.on('execution-result-night', (data: any) => {
       setExecutionResult(data);
     });
-    // 1차 투표 전체 현황 snapshot (delta 대신 full 교체)
-    socket?.on('vote-snapshot', (data: any[]) => {
-      setLiveVotes(data);
-    });
     // 1차 투표 마감 결과
     socket?.on('vote-closed', (data: any) => {
       setVoteClosedResult({
@@ -207,7 +207,6 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
     return () => {
       socket?.off('night-result');
       socket?.off('execution-result-night');
-      socket?.off('vote-snapshot');
       socket?.off('vote-closed');
       socket?.off('final-vote-updated');
     };
@@ -404,16 +403,14 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
                     onClick={() => {
                       setVoteCloseError(null);
                       setVoteCloseLoading(true);
-                      // 6초 타임아웃: 서버 무응답 대비
-                      const timer = setTimeout(() => {
+                      socket?.timeout(6000).emit('close-day-vote', {}, (error: any, response: any) => {
                         setVoteCloseLoading(false);
-                        setVoteCloseError('서버 응답 없음 — 다시 눌러보세요');
-                      }, 6000);
-                      socket?.emit('close-day-vote', (r: any) => {
-                        clearTimeout(timer);
-                        setVoteCloseLoading(false);
-                        if (!r?.success) {
-                          setVoteCloseError(r?.error || '투표 마감 실패 — 다시 시도하세요');
+                        if (error) {
+                          setVoteCloseError('서버 응답 없음 — 다시 눌러보세요');
+                          return;
+                        }
+                        if (!response?.success) {
+                          setVoteCloseError(response?.error || '투표 마감 실패 — 다시 시도하세요');
                         }
                       });
                     }}
@@ -427,9 +424,13 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
                   <button
                     onClick={() => {
                       setFinalVoteCloseError(null);
-                      socket?.emit('close-final-vote', (r: any) => {
-                        if (!r?.success) {
-                          setFinalVoteCloseError(r?.error || '찬반 마감 실패 — 다시 시도하세요');
+                      socket?.timeout(6000).emit('close-final-vote', {}, (error: any, response: any) => {
+                        if (error) {
+                          setFinalVoteCloseError('서버 응답 없음 — 다시 눌러보세요');
+                          return;
+                        }
+                        if (!response?.success) {
+                          setFinalVoteCloseError(response?.error || '찬반 마감 실패 — 다시 시도하세요');
                         }
                       });
                     }}

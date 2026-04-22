@@ -194,18 +194,8 @@ function initSocketServer(httpServer: any): SocketIOServer {
           const voter = room.players.get(playerId);
           const target = data.targetId ? room.players.get(data.targetId) : null;
           console.log(`[Room: ${roomCode}] 낮 투표: ${voter?.nickname} -> ${target?.nickname || '없음'} (총 ${room.dayVotes.size}표)`);
-          // 현재 전체 투표 현황 snapshot 전송 (delta 방식 대신 full snapshot)
-          const snapshot: { voterId: string; voterNickname: string; targetId: string; targetNickname: string }[] = [];
-          room.dayVotes.forEach((tid, vid) => {
-            if (tid !== null) {
-              const v = room.players.get(vid);
-              const t = room.players.get(tid);
-              if (v && t) snapshot.push({ voterId: vid, voterNickname: v.nickname, targetId: tid, targetNickname: t.nickname });
-            }
-          });
-          io!.to(roomCode).emit('vote-snapshot', snapshot);
-          // 발신자도 확실히
-          socket.emit('vote-snapshot', snapshot);
+          const roomState = gameEngine.getRoomState(roomCode);
+          io!.to(roomCode).emit('room-updated', roomState);
           callback({ success: true });
         } else {
           callback({ success: false, error: '투표 실패' });
@@ -217,7 +207,7 @@ function initSocketServer(httpServer: any): SocketIOServer {
     });
 
     // 1차 투표 마감 (방장)
-    socket.on('close-day-vote', (callback) => {
+    socket.on('close-day-vote', (_data, callback) => {
       try {
         if (typeof callback !== 'function') {
           console.error('[Socket] close-day-vote: callback이 함수가 아님');
@@ -301,8 +291,12 @@ function initSocketServer(httpServer: any): SocketIOServer {
     });
 
     // 2차 찬반 투표 마감 (방장)
-    socket.on('close-final-vote', (callback) => {
+    socket.on('close-final-vote', (_data, callback) => {
       try {
+        if (typeof callback !== 'function') {
+          console.error('[Socket] close-final-vote: callback이 함수가 아님');
+          return;
+        }
         const { roomCode, playerId } = socket.data;
         const result = gameEngine.closeFinalVote(roomCode, playerId);
 
