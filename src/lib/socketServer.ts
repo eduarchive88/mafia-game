@@ -203,10 +203,12 @@ function initSocketServer(httpServer: any): SocketIOServer {
           console.log(`[Room: ${roomCode}] 투표 처리 및 처형`);
           const roomState = gameEngine.getRoomState(roomCode);
           const victoryTeam = gameEngine.checkVictoryCondition(roomCode);
+          const executionResult = gameEngine.getLastDayExecutionResult(roomCode);
 
           io!.to(roomCode).emit('execution-completed', {
             roomState,
             victoryTeam,
+            executionResult,
           });
 
           callback({ success: true });

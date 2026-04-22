@@ -28,6 +28,10 @@ export interface Room {
   savedByDoctor: string | null;
   policeCheckResult: boolean | null;
   policeCheckTarget: string | null;
+  // 낮 처형 결과 (다음 밤 전환 전까지 보관)
+  lastDayVoteCounts: { playerId: string; nickname: string; votes: number }[];
+  lastExecutedRole: Role | null;
+  lastExecutedNickname: string | null;
   createdAt: number;
   updatedAt: number;
 }

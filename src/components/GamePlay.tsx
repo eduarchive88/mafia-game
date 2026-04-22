@@ -28,6 +28,11 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
   const [teammates, setTeammates] = useState<{ id: string; nickname: string }[]>([]);
   const [connectionToast, setConnectionToast] = useState<{ message: string; type: 'dc' | 'rc' } | null>(null);
   const [nightResult, setNightResult] = useState<{ type: 'killed'; victimName: string } | { type: 'saved' } | { type: 'nobody' } | null>(null);
+  const [executionResult, setExecutionResult] = useState<{
+    voteCounts: { playerId: string; nickname: string; votes: number }[];
+    executedNickname: string | null;
+    executedRole: string | null;
+  } | null>(null);
 
   // 역할 완료 사운드 (Web Audio API)
   const playRoleSound = (role: string) => {
@@ -115,7 +120,10 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
       setNightStatus({ mafia: false, doctor: false, police: false });
       setPoliceResult(null);
       // 낮→밤 전환 시 밤 결과 배너 초기화
-      if (data.state === 'night') setNightResult(null);
+      if (data.state === 'night') {
+        setNightResult(null);
+        setExecutionResult(null);
+      }
     });
 
     return () => {
@@ -172,6 +180,9 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
       setPlayers(Object.values(data.roomState?.players || {}));
       if (data.victoryTeam) {
         setWinner(data.victoryTeam === 'mafia' ? '마피아' : '시민');
+      }
+      if (data.executionResult) {
+        setExecutionResult(data.executionResult);
       }
     });
 
@@ -341,6 +352,75 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
         {winner && (
           <div className="bg-green-900 border border-green-700 rounded-lg p-4 mb-6 text-center">
             <p className="text-2xl font-bold">{winner} 승리!</p>
+          </div>
+        )}
+
+        {/* 낮 처형 결과 공지 배너 (처형 후 ~ 밤 전환 전까지 표시) */}
+        {executionResult && gameState !== 'night' && gameState !== 'waiting' && (
+          <div className={`rounded-lg p-5 mb-6 border ${
+            executionResult.executedRole === 'mafia'
+              ? 'bg-green-950 border-green-700'
+              : executionResult.executedNickname
+                ? 'bg-red-950 border-red-700'
+                : 'bg-gray-900 border-gray-700'
+          }`}>
+            {/* 처형 결과 메시지 */}
+            <p className="text-center text-xl font-bold mb-4">
+              {executionResult.executedRole === 'mafia' ? (
+                <span className="text-green-300">
+                  ⚖️ 마피아 <span className="underline">{executionResult.executedNickname}</span>이(가) 처형됐습니다!<br/>
+                  <span className="text-base font-normal text-green-400">시민팀의 승리가 다가옵니다!</span>
+                </span>
+              ) : executionResult.executedNickname ? (
+                <span className="text-red-300">
+                  ⚖️ 무고한 시민 <span className="underline">{executionResult.executedNickname}</span>이(가) 처형됐습니다.<br/>
+                  <span className="text-base font-normal text-red-400">마피아의 음모가 계속됩니다...</span>
+                </span>
+              ) : (
+                <span className="text-gray-400">⚖️ 동점으로 아무도 처형되지 않았습니다.</span>
+              )}
+            </p>
+
+            {/* 정체 공개 */}
+            {executionResult.executedNickname && executionResult.executedRole && (
+              <p className="text-center text-sm mb-4">
+                <span className="bg-gray-800 rounded px-3 py-1">
+                  {executionResult.executedNickname}의 정체:{' '}
+                  <span className={`font-bold ${
+                    executionResult.executedRole === 'mafia' ? 'text-red-400' :
+                    executionResult.executedRole === 'doctor' ? 'text-cyan-400' :
+                    executionResult.executedRole === 'police' ? 'text-yellow-400' :
+                    'text-blue-300'
+                  }`}>
+                    {executionResult.executedRole === 'mafia' ? '🔴 마피아' :
+                     executionResult.executedRole === 'doctor' ? '💊 의사' :
+                     executionResult.executedRole === 'police' ? '🔍 경찰' :
+                     '👤 시민'}
+                  </span>
+                </span>
+              </p>
+            )}
+
+            {/* 투표 현황 */}
+            {executionResult.voteCounts.length > 0 && (
+              <div>
+                <p className="text-xs text-gray-400 text-center mb-2">투표 결과</p>
+                <div className="flex flex-wrap justify-center gap-2">
+                  {executionResult.voteCounts.map((v) => (
+                    <span
+                      key={v.playerId}
+                      className={`px-3 py-1 rounded-full text-sm font-semibold border ${
+                        v.playerId === executionResult.voteCounts[0]?.playerId
+                          ? 'bg-red-900 border-red-600 text-red-200'
+                          : 'bg-gray-800 border-gray-600 text-gray-300'
+                      }`}
+                    >
+                      {v.nickname} {v.votes}표
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

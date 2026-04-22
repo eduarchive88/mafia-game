@@ -31,6 +31,9 @@ class GameEngine {
         savedByDoctor: null,
         policeCheckResult: null,
         policeCheckTarget: null,
+        lastDayVoteCounts: [],
+        lastExecutedRole: null,
+        lastExecutedNickname: null,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -162,12 +165,15 @@ class GameEngine {
       this.processNightVotes(roomCode);
     }
 
-    // 낮에서 밤으로 전환할 때 이전 밤 결과 초기화
+    // 낮에서 밤으로 전환할 때 이전 낮/밤 결과 초기화
     if (targetState === 'night') {
       room.savedByDoctor = null;
       room.lastKilledByMafia = null;
       room.policeCheckResult = null;
       room.policeCheckTarget = null;
+      room.lastDayVoteCounts = [];
+      room.lastExecutedRole = null;
+      room.lastExecutedNickname = null;
     }
 
     room.state = targetState;
@@ -312,11 +318,20 @@ class GameEngine {
 
     // 투표 결과 집계
     const voteResults: Map<string, number> = new Map();
-    room.dayVotes.forEach((targetId, voterId) => {
+    room.dayVotes.forEach((targetId) => {
       if (targetId !== null) {
         voteResults.set(targetId, (voteResults.get(targetId) || 0) + 1);
       }
     });
+
+    // 투표 현황 스냅샷 저장 (닉네임 포함)
+    room.lastDayVoteCounts = Array.from(voteResults.entries())
+      .map(([pid, votes]) => ({
+        playerId: pid,
+        nickname: room.players.get(pid)?.nickname || '알 수 없음',
+        votes,
+      }))
+      .sort((a, b) => b.votes - a.votes);
 
     // 가장 많은 투표를 받은 플레이어 처형
     let maxVotes = 0;
@@ -333,6 +348,8 @@ class GameEngine {
       if (executed) {
         executed.alive = false;
         room.executedPlayer = executedPlayerId;
+        room.lastExecutedRole = executed.role;
+        room.lastExecutedNickname = executed.nickname;
       }
     }
 
@@ -340,6 +357,19 @@ class GameEngine {
     room.updatedAt = Date.now();
 
     return true;
+  }
+
+  /**
+   * 직전 낮 처형 결과 반환 (클라이언트 공지용)
+   */
+  getLastDayExecutionResult(roomCode: string) {
+    const room = this.rooms.get(roomCode);
+    if (!room) return null;
+    return {
+      voteCounts: room.lastDayVoteCounts,
+      executedNickname: room.lastExecutedNickname,
+      executedRole: room.lastExecutedRole,
+    };
   }
 
   /**
