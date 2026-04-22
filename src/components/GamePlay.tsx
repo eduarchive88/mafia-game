@@ -51,6 +51,7 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
 
   const [voteCloseError, setVoteCloseError] = useState<string | null>(null);
   const [finalVoteCloseError, setFinalVoteCloseError] = useState<string | null>(null);
+  const [voteCloseLoading, setVoteCloseLoading] = useState(false);
   const playRoleSound = (role: string) => {
     try {
       const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
@@ -192,6 +193,12 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
         setGameState('execution');
         setPlayers(Object.values(data.roomState?.players || {}));
         setHasVoted(false);
+      } else {
+        // 동률 → vote 상태 유지, 재투표 가능하도록 초기화
+        setHasVoted(false);
+        setSelectedTarget(null);
+        setLiveVotes([]);
+        setVoteCloseError(null);
       }
     });
     // 2차 찬반 실시간 현황
@@ -284,6 +291,20 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
     socket?.emit('day-vote', { targetId }, (response: any) => {
       if (response.success) {
         setHasVoted(true);
+        // vote-updated 이벤트에만 의존하지 않고 직접 업데이트
+        if (targetId) {
+          const targetPlayer = players.find(p => p.id === targetId);
+          const me = players.find(p => p.id === playerId);
+          setLiveVotes(prev => {
+            const filtered = prev.filter(v => v.voterId !== playerId);
+            return [...filtered, {
+              voterId: playerId,
+              voterNickname: me?.nickname || '',
+              targetId,
+              targetNickname: targetPlayer?.nickname || '',
+            }];
+          });
+        }
       }
     });
   };
@@ -396,17 +417,20 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
                 {/* 투표 단계: 1차 투표 마감 */}
                 {gameState === 'vote' && (
                   <button
+                    disabled={voteCloseLoading}
                     onClick={() => {
                       setVoteCloseError(null);
+                      setVoteCloseLoading(true);
                       socket?.emit('close-day-vote', (r: any) => {
+                        setVoteCloseLoading(false);
                         if (!r?.success) {
                           setVoteCloseError(r?.error || '투표 마감 실패 — 다시 시도하세요');
                         }
                       });
                     }}
-                    className="px-4 py-2 bg-red-700 hover:bg-red-600 rounded transition font-semibold"
+                    className="px-4 py-2 bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:cursor-wait rounded transition font-semibold"
                   >
-                    ⚖️ 투표 마감
+                    {voteCloseLoading ? '⏳ 처리 중...' : '⚖️ 투표 마감'}
                   </button>
                 )}
                 {/* 처형 단계: 2차 찬반 마감 */}
@@ -561,6 +585,22 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
               <span className="text-xl">🗳️</span>
               <h3 className="text-lg font-bold text-amber-300">1차 투표 — 처형 대상 지목 (공개)</h3>
             </div>
+
+            {/* 동률 메시지 */}
+            {voteClosedResult && !voteClosedResult.finalVoteTarget && (
+              <div className="mb-3 p-3 bg-yellow-900/60 border border-yellow-700 rounded text-center">
+                <p className="text-yellow-300 font-bold text-sm">⚖️ 동점입니다! 다시 투표하세요.</p>
+                {voteClosedResult.voteCounts.length > 0 && (
+                  <div className="flex flex-wrap justify-center gap-1 mt-2">
+                    {voteClosedResult.voteCounts.map((v: any) => (
+                      <span key={v.playerId} className="px-2 py-0.5 bg-yellow-900 rounded text-xs text-yellow-200">
+                        {v.nickname} {v.votes}표
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {isAlive && !hasVoted && (
               <p className="text-gray-300 text-sm mb-3">아래 플레이어 목록에서 <span className="text-red-300 font-semibold">처형할 대상</span>을 클릭하세요. 공개 투표입니다.</p>
             )}

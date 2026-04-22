@@ -194,8 +194,15 @@ function initSocketServer(httpServer: any): SocketIOServer {
           const voter = room?.players.get(playerId);
           const target = data.targetId ? room?.players.get(data.targetId) : null;
           console.log(`[Room: ${roomCode}] 낮 투표: ${voter?.nickname} -> ${target?.nickname || '없음'}`);
-          // 모든 플레이어에게 실시간 투표 현황 공지
+          // 모든 플레이어에게 실시간 투표 현황 공지 (발신자 포함)
           io!.to(roomCode).emit('vote-updated', {
+            voterId: playerId,
+            voterNickname: voter?.nickname,
+            targetId: data.targetId,
+            targetNickname: target?.nickname || null,
+          });
+          // 발신자도 확실히 받도록 직접 emit
+          socket.emit('vote-updated', {
             voterId: playerId,
             voterNickname: voter?.nickname,
             targetId: data.targetId,
