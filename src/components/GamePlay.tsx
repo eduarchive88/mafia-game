@@ -345,22 +345,14 @@ export default function GamePlay({ roomCode, playerId, socket, roomState }: Game
                     🗳️ 투표 시작
                   </button>
                 )}
-                {/* 투표 중 & 처형 전: 처형 실행 + 토론으로 돌아가기 */}
+                {/* 투표 중 & 처형 전: 처형 실행만 */}
                 {gameState === 'vote' && !executionResult && (
-                  <>
-                    <button
-                      onClick={() => socket?.emit('execute-vote', (r: any) => { if (!r?.success) {} })}
-                      className="px-4 py-2 bg-red-700 hover:bg-red-600 rounded transition font-semibold"
-                    >
-                      ⚖️ 처형 실행
-                    </button>
-                    <button
-                      onClick={() => socket?.emit('transition-state', { targetState: 'day' }, () => {})}
-                      className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition font-semibold text-sm"
-                    >
-                      ↩️ 토론으로
-                    </button>
-                  </>
+                  <button
+                    onClick={() => socket?.emit('execute-vote', (r: any) => { if (!r?.success) {} })}
+                    className="px-4 py-2 bg-red-700 hover:bg-red-600 rounded transition font-semibold"
+                  >
+                    ⚖️ 처형 실행
+                  </button>
                 )}
                 {/* 처형 완료 후: 밤으로 */}
                 {gameState === 'vote' && executionResult && (
