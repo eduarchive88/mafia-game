@@ -550,7 +550,7 @@ class GameEngine {
         id: playerId,
         nickname: player.nickname,
         alive: player.alive,
-        role: viewerId === playerId ? player.role : '?',
+        role: room.state === 'ended' || viewerId === playerId ? player.role : '?',
         disconnected: player.disconnected || false,
       };
     });
